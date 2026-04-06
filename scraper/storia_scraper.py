@@ -82,6 +82,30 @@ def get_listing_urls(page_num: int) -> list[str]:
     return urls
 
 
+def fetch_coords(url: str) -> tuple[float | None, float | None]:
+    """
+    Lightweight fetch — returns just (lat, lon) from Storia's __NEXT_DATA__.
+    Used by the coord-backfill pipeline phase.
+    """
+    scraper = _get_scraper()
+    try:
+        response = scraper.get(url, timeout=30)
+        response.raise_for_status()
+    except Exception as e:
+        logger.warning(f"fetch_coords failed for {url}: {e}")
+        return None, None
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    script = soup.find("script", id="__NEXT_DATA__")
+    if not script or not script.string:
+        return None, None
+    try:
+        ad = json.loads(script.string)["props"]["pageProps"]["ad"]
+        return _extract_coords(ad)
+    except (KeyError, json.JSONDecodeError):
+        return None, None
+
+
 def scrape_listing(url: str) -> dict | None:
     """
     Scrape one listing page and return a raw dict with these keys:
@@ -194,6 +218,9 @@ def _parse_from_next_data(soup: BeautifulSoup, url: str) -> dict | None:
     description_html: str = ad.get("description") or ""
     description = re.sub(r"<[^>]+>", " ", description_html).strip() or None
 
+    # --- coordinates from Storia's own geocoding ---
+    lat, lon = _extract_coords(ad)
+
     return {
         "url": url,
         "title": title,
@@ -202,7 +229,18 @@ def _parse_from_next_data(soup: BeautifulSoup, url: str) -> dict | None:
         "details_raw": details_raw,
         "features_raw": features_raw,
         "description": description,
+        "lat": lat,
+        "lon": lon,
     }
+
+
+def _extract_coords(ad: dict) -> tuple[float | None, float | None]:
+    """Pull lat/lon from Storia's location.coordinates object."""
+    try:
+        coords = ad["location"]["coordinates"]
+        return float(coords["latitude"]), float(coords["longitude"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
 
 
 def _build_address_raw(ad: dict) -> str | None:

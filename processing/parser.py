@@ -121,6 +121,38 @@ def parse_compartmentare(details: dict) -> str | None:
     return None
 
 
+def parse_is_penthouse(details: dict, title: str | None, description: str | None) -> bool:
+    """
+    True if the listing is a penthouse or duplex on the top floor.
+    Criteria: explicitly called penthouse/duplex OR floor == total_floors AND area > 120m².
+    """
+    text = f"{title or ''} {description or ''}".lower()
+    if "penthouse" in text or "duplex" in text:
+        return True
+    floor, total = parse_floor(details)
+    area_val = details.get("suprafață utilă") or details.get("suprafata utila") or ""
+    import re
+    area_m = re.search(r"(\d+(?:[.,]\d+)?)", area_val)
+    area = float(area_m.group(1).replace(",", ".")) if area_m else 0
+    if floor is not None and total is not None and floor >= total and area > 120:
+        return True
+    return False
+
+
+def parse_construction_status(details: dict) -> str | None:
+    """Return normalized construction status: 'ready', 'under_construction', 'needs_renovation', or None."""
+    val = (details.get("stare construcție") or details.get("stare constructie") or "").lower()
+    if not val:
+        return None
+    if "construcție" in val or "constructie" in val or "finalizare" in val or "completion" in val:
+        return "under_construction"
+    if "gata" in val or "ready" in val or "utilizare" in val:
+        return "ready"
+    if "renov" in val or "necesit" in val:
+        return "needs_renovation"
+    return None
+
+
 def parse_neighborhood_from_address(address_raw: str | None) -> str | None:
     """
     Extract the neighborhood string the seller wrote.

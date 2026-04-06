@@ -64,6 +64,7 @@ def insert_listing(conn: sqlite3.Connection, listing: dict) -> bool:
                 has_parking, has_balcony, has_elevator, has_ac,
                 has_central_heating, has_storage, is_renovated, is_furnished,
                 seismic_risk, is_post_1977,
+                is_new_build, is_cgi_listing, is_penthouse,
                 lat, lon, nearest_metro, dist_metro_m, dist_center_m,
                 description, address_raw, neighborhood_raw,
                 price_raw, details_raw_json
@@ -75,6 +76,7 @@ def insert_listing(conn: sqlite3.Connection, listing: dict) -> bool:
                 :has_parking, :has_balcony, :has_elevator, :has_ac,
                 :has_central_heating, :has_storage, :is_renovated, :is_furnished,
                 :seismic_risk, :is_post_1977,
+                :is_new_build, :is_cgi_listing, :is_penthouse,
                 :lat, :lon, :nearest_metro, :dist_metro_m, :dist_center_m,
                 :description, :address_raw, :neighborhood_raw,
                 :price_raw, :details_raw_json
@@ -102,6 +104,9 @@ def insert_listing(conn: sqlite3.Connection, listing: dict) -> bool:
                 "is_furnished": int(listing.get("is_furnished") or 0),
                 "seismic_risk": listing.get("seismic_risk"),
                 "is_post_1977": listing.get("is_post_1977"),
+                "is_new_build": int(listing.get("is_new_build") or 0),
+                "is_cgi_listing": int(listing.get("is_cgi_listing") or 0),
+                "is_penthouse": int(listing.get("is_penthouse") or 0),
                 "lat": listing.get("lat"),
                 "lon": listing.get("lon"),
                 "nearest_metro": listing.get("nearest_metro"),
@@ -119,6 +124,41 @@ def insert_listing(conn: sqlite3.Connection, listing: dict) -> bool:
     except sqlite3.Error as e:
         conn.rollback()
         raise
+
+
+def get_listings_missing_coords(conn: sqlite3.Connection, limit: int = 200) -> list:
+    """Listings that have no lat/lon yet (sentinel -1 means permanently failed)."""
+    return conn.execute(
+        "SELECT id, url FROM Listings WHERE lat IS NULL LIMIT ?",
+        (limit,)
+    ).fetchall()
+
+
+def update_coords_and_geo(
+    conn: sqlite3.Connection,
+    listing_id: int,
+    lat: float,
+    lon: float,
+    neighborhood: str | None,
+    zone: str | None,
+    dist_metro_m: float,
+    nearest_metro: str,
+    dist_center_m: float,
+) -> None:
+    neighborhood_id = None
+    if neighborhood:
+        neighborhood_id = upsert_neighborhood(conn, neighborhood, zone)
+    conn.execute(
+        """
+        UPDATE Listings
+        SET lat = ?, lon = ?, neighborhood_id = ?,
+            dist_metro_m = ?, nearest_metro = ?, dist_center_m = ?,
+            geocoded_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (lat, lon, neighborhood_id, dist_metro_m, nearest_metro, dist_center_m, listing_id),
+    )
+    conn.commit()
 
 
 def get_ungeocoded_listings(conn: sqlite3.Connection, limit: int = 100) -> list:

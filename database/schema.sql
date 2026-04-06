@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS Listings (
     seismic_risk         TEXT,
     is_post_1977         INTEGER,
 
+    -- New build / listing quality flags
+    is_new_build         INTEGER DEFAULT 0,
+    is_cgi_listing       INTEGER DEFAULT 0,
+    is_penthouse         INTEGER DEFAULT 0,
+
     -- Geographic features (from coordinates, never from seller text)
     lat                  REAL,
     lon                  REAL,

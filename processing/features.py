@@ -9,8 +9,31 @@ from processing.parser import (
     parse_floor,
     parse_year_built,
     parse_compartmentare,
+    parse_construction_status,
+    parse_is_penthouse,
     parse_neighborhood_from_address,
 )
+
+# Keywords that indicate CGI renders or explicitly unfurnished/unfinished state
+_CGI_KEYWORDS = [
+    # Actual phrases used on Storia.ro (confirmed from DB sample)
+    "titlu de prezentare",      # "imaginile sunt cu titlu de prezentare"
+    "titlul de prezentare",     # "poze cu titlul de prezentare"
+    "caracter orientativ",      # "imagini cu caracter orientativ"
+    "caracter informativ",      # "imagini cu caracter informativ"
+    "propuneri de amenajare",   # "fotografiile reprezintă propuneri de amenajare"
+    "scopul de prezentare",
+    # Fallback: older / less common variants
+    "randare", "render",
+    "exemplu ilustrativ",
+]
+
+# Keywords that explicitly indicate the apartment is unfurnished/empty shell
+_UNFURNISHED_KEYWORDS = [
+    "nemobilat", "fara mobila", "fără mobilă", "fara mobilier", "fără mobilier",
+    "mobilier optional", "mobilier nu este inclus", "fara furniture",
+    "se vinde gol", "se vinde neechipat",
+]
 
 # Seismic risk per CLAUDE.md specification
 HIGH_SEISMIC_RISK_NEIGHBORHOODS = {
@@ -51,6 +74,31 @@ def parse_boolean_features(features_list: list, description: str | None) -> dict
     }
 
 
+def is_cgi_listing(description: str | None) -> bool:
+    """True if the listing uses CGI/rendered images presented as real interiors."""
+    if not description:
+        return False
+    desc_lower = description.lower()
+    return any(kw in desc_lower for kw in _CGI_KEYWORDS)
+
+
+def is_explicitly_unfurnished(description: str | None) -> bool:
+    """True if the listing explicitly states the apartment is unfurnished/empty."""
+    if not description:
+        return False
+    desc_lower = description.lower()
+    return any(kw in desc_lower for kw in _UNFURNISHED_KEYWORDS)
+
+
+def compute_is_new_build(year_built: int | None, construction_status: str | None) -> int:
+    """1 if the apartment is a new build (built/finishing 2020+) or under construction."""
+    if construction_status == "under_construction":
+        return 1
+    if year_built is not None and year_built >= 2020:
+        return 1
+    return 0
+
+
 def compute_seismic_risk(year_built: int | None, neighborhood: str | None) -> str:
     if year_built is None:
         return "unknown"
@@ -86,11 +134,30 @@ def enrich_listing(raw: dict) -> dict:
     floor, total_floors = parse_floor(details)
     year_built = parse_year_built(details, description)
     compartmentare = parse_compartmentare(details)
+    construction_status = parse_construction_status(details)
+    is_penthouse = parse_is_penthouse(details, title, description)
     neighborhood_raw = parse_neighborhood_from_address(raw.get("address_raw"))
 
     bool_feats = parse_boolean_features(features_list, description)
     seismic_risk = compute_seismic_risk(year_built, None)  # neighborhood not known yet
     is_post_1977 = compute_is_post_1977(year_built)
+
+    # New build / CGI detection
+    cgi = is_cgi_listing(description)
+    explicitly_unfurnished = is_explicitly_unfurnished(description)
+    is_new_build = compute_is_new_build(year_built, construction_status)
+
+    # Fix misleading boolean flags:
+    # 1. CGI renders on new builds → can't be renovated or furnished
+    if is_new_build and cgi:
+        bool_feats["is_renovated"] = False
+        bool_feats["is_furnished"] = False
+    # 2. Explicitly says unfurnished → override any keyword match
+    if explicitly_unfurnished:
+        bool_feats["is_furnished"] = False
+    # 3. New build under construction → can't be renovated
+    if construction_status == "under_construction":
+        bool_feats["is_renovated"] = False
 
     price_per_sqm = None
     if price_eur and area_sqm and area_sqm > 0:
@@ -123,9 +190,18 @@ def enrich_listing(raw: dict) -> dict:
         "seismic_risk": seismic_risk,
         "is_post_1977": is_post_1977,
 
-        # Geographic (populated later by geocoding job)
-        "lat": None,
-        "lon": None,
+        # New build / CGI
+        "is_new_build": is_new_build,
+        "is_cgi_listing": int(cgi),
+
+        # Penthouse/duplex
+        "is_penthouse": int(is_penthouse),
+
+        # Coordinates from Storia (may be None for old listings backfilled later)
+        "lat": raw.get("lat"),
+        "lon": raw.get("lon"),
+
+        # Geographic features derived from coords (populated by geocoding job)
         "neighborhood": None,
         "zone": None,
         "nearest_metro": None,

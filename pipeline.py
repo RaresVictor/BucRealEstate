@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import logging
+import random
 import sys
 
 logging.basicConfig(
@@ -47,6 +48,14 @@ def phase_scrape(pages: int, db: str = DB_PATH) -> None:
                 failed += 1
                 continue
 
+            # Skip rentals that slipped through the vanzare URL filter
+            url_lower = (raw.get("url") or "").lower()
+            title_lower = (raw.get("title") or "").lower()
+            if "inchiriere" in url_lower or "inchiriere" in title_lower or "închiriere" in title_lower:
+                logger.debug(f"Skipping rental listing: {raw.get('url')}")
+                skipped += 1
+                continue
+
             enriched = enrich_listing(raw)
             was_new = insert_listing(conn, enriched)
             if was_new:
@@ -63,6 +72,68 @@ def phase_scrape(pages: int, db: str = DB_PATH) -> None:
 
     conn.close()
     logger.info(f"Scrape complete: {inserted} new, {skipped} duplicate, {failed} failed")
+
+
+def phase_fetch_coords(db: str = DB_PATH) -> None:
+    """
+    For each listing without lat/lon, re-fetch the Storia page,
+    pull coordinates from __NEXT_DATA__, then compute neighborhood/metro/center.
+    Much faster than GeoPy — no rate limits, more accurate coords.
+    """
+    import time
+    from scraper.storia_scraper import fetch_coords
+    from geocoding.geocoding import (
+        point_in_neighborhood, get_zone, get_nearest_metro, get_distance_to_center
+    )
+    from database.db_manager import (
+        get_connection, get_listings_missing_coords, update_coords_and_geo
+    )
+
+    conn = get_connection(db)
+    updated = 0
+    failed = 0
+
+    while True:
+        rows = get_listings_missing_coords(conn, limit=200)
+        if not rows:
+            break
+
+        for row in rows:
+            lat, lon = fetch_coords(row["url"])
+            if lat is None or lon is None:
+                failed += 1
+                # Mark with sentinel so we don't loop forever on dead listings
+                conn.execute(
+                    "UPDATE Listings SET lat = -1, lon = -1 WHERE id = ?",
+                    (row["id"],)
+                )
+                conn.commit()
+                time.sleep(0.5)
+                continue
+
+            neighborhood = point_in_neighborhood(lat, lon)
+            zone = get_zone(neighborhood)
+            dist_metro_m, nearest_metro = get_nearest_metro(lat, lon)
+            dist_center_m = get_distance_to_center(lat, lon)
+
+            update_coords_and_geo(
+                conn,
+                listing_id=row["id"],
+                lat=lat,
+                lon=lon,
+                neighborhood=neighborhood,
+                zone=zone,
+                dist_metro_m=dist_metro_m,
+                nearest_metro=nearest_metro,
+                dist_center_m=dist_center_m,
+            )
+            updated += 1
+            time.sleep(random.uniform(0.5, 1.0))
+
+        logger.info(f"Coords fetched: {updated} updated, {failed} failed so far…")
+
+    conn.close()
+    logger.info(f"fetch-coords complete: {updated} updated, {failed} failed")
 
 
 def phase_geocode(batch: int, db: str = DB_PATH) -> None:
@@ -133,6 +204,8 @@ def phase_stats(db: str = DB_PATH) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="BucRealEstate pipeline")
     parser.add_argument("--scrape", action="store_true")
+    parser.add_argument("--fetch-coords", action="store_true",
+                        help="Backfill lat/lon by re-fetching listing pages from Storia")
     parser.add_argument("--geocode", action="store_true")
     parser.add_argument("--stats", action="store_true")
     parser.add_argument("--all", action="store_true")
@@ -145,12 +218,15 @@ def main() -> None:
     args = parser.parse_args()
     db = args.db
 
-    if not any([args.scrape, args.geocode, args.stats, args.all]):
+    if not any([args.scrape, args.fetch_coords, args.geocode, args.stats, args.all]):
         parser.print_help()
         sys.exit(1)
 
     if args.scrape or args.all:
         phase_scrape(args.pages, db)
+
+    if getattr(args, "fetch_coords", False) or args.all:
+        phase_fetch_coords(db)
 
     if args.geocode or args.all:
         phase_geocode(args.batch, db)
