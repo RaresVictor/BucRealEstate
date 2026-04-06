@@ -2,6 +2,8 @@
 Boolean / categorical feature extraction and listing enrichment.
 """
 
+from geocoding.geocoding import validate_coords
+
 from processing.parser import (
     parse_price,
     parse_area,
@@ -116,6 +118,14 @@ def compute_is_post_1977(year_built: int | None) -> int | None:
     return 1 if year_built > 1977 else 0
 
 
+def _validated_coords(lat, lon, address_raw: str | None) -> dict:
+    """Validate Storia's coordinates; refine with Nominatim if suspicious."""
+    if lat is None or lon is None:
+        return {"lat": None, "lon": None}
+    lat, lon, _ = validate_coords(float(lat), float(lon), address_raw)
+    return {"lat": lat, "lon": lon}
+
+
 def enrich_listing(raw: dict) -> dict:
     """
     Transform a raw scraper dict into a fully-enriched dict ready for DB insertion.
@@ -197,9 +207,8 @@ def enrich_listing(raw: dict) -> dict:
         # Penthouse/duplex
         "is_penthouse": int(is_penthouse),
 
-        # Coordinates from Storia (may be None for old listings backfilled later)
-        "lat": raw.get("lat"),
-        "lon": raw.get("lon"),
+        # Coordinates — validated against Nominatim if Storia's look wrong
+        **_validated_coords(raw.get("lat"), raw.get("lon"), raw.get("address_raw")),
 
         # Geographic features derived from coords (populated by geocoding job)
         "neighborhood": None,

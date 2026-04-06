@@ -83,7 +83,8 @@ def phase_fetch_coords(db: str = DB_PATH) -> None:
     import time
     from scraper.storia_scraper import fetch_coords
     from geocoding.geocoding import (
-        point_in_neighborhood, get_zone, get_nearest_metro, get_distance_to_center
+        point_in_neighborhood, get_zone, get_nearest_metro,
+        get_distance_to_center, validate_coords,
     )
     from database.db_manager import (
         get_connection, get_listings_missing_coords, update_coords_and_geo
@@ -100,6 +101,10 @@ def phase_fetch_coords(db: str = DB_PATH) -> None:
 
         for row in rows:
             lat, lon = fetch_coords(row["url"])
+            if lat is not None and lon is not None:
+                lat, lon, refined = validate_coords(lat, lon, row.get("address_raw"))
+                if refined:
+                    logger.info(f"Coords refined via Nominatim for {row['url']}")
             if lat is None or lon is None:
                 failed += 1
                 # Mark with sentinel so we don't loop forever on dead listings

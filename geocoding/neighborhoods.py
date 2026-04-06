@@ -187,7 +187,6 @@ METRO_STATIONS: dict[str, tuple[float, float]] = {
     "Iancului": (44.4404, 26.1513),
     "Obor": (44.4493, 26.1275),
     "Ștefan cel Mare": (44.4506, 26.1098),
-    "Victoriei 1": (44.4526, 26.0897),
     "Aviației": (44.4832, 26.1118),
     "Aurel Vlaicu": (44.4716, 26.1100),
     "Floreasca": (44.4637, 26.1025),

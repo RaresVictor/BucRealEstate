@@ -179,7 +179,7 @@ if url and st.button("Analizează", type="primary"):
             from processing.features import enrich_listing
             from geocoding.geocoding import (
                 point_in_neighborhood, get_zone,
-                get_nearest_metro, get_distance_to_center,
+                get_nearest_metro, get_distance_to_center, validate_coords,
             )
             import sqlite3
 
