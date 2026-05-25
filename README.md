@@ -189,8 +189,6 @@ Paste a `storia.ro/ro/oferta/...` link and analyse.
 - **Metrics** (MAE, RMSE, R², MAPE) and interval coverage are written to
   `metadata.json` and surfaced live in the app sidebar.
 
-> Numbers in the sidebar come straight from your last training run — keep them
-> honest and let them update themselves rather than hard-coding values in this README.
 
 ---
 
