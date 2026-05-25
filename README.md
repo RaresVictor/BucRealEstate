@@ -192,23 +192,8 @@ Paste a `storia.ro/ro/oferta/...` link and analyse.
 
 ---
 
-## Adding a screenshot
-
-The app is the best thing about this project — show it. With the app running and a
-listing analysed, take a screenshot of the verdict banner + neighbourhood
-distribution, save it as `docs/screenshot.png`, and reference it near the top:
-
-```markdown
-![App screenshot](docs/screenshot.png)
-```
-
-A short screen-recording turned into a GIF (paste link → verdict appears) is even
-better, since the live-scrape-to-prediction flow is the part that impresses.
-
----
-
 ## Possible next steps
-
+- Improve the point-in-polygon address calculation, which currently can set the same apartment in more than one polygons
 - Track listings over time to estimate price *trends*, not just a cross-sectional snapshot.
 - Add SHAP explanations so each estimate shows which features drove it.
 - Expand beyond apartments / beyond Bucharest using the same pipeline.
