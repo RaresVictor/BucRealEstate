@@ -150,8 +150,14 @@ def train(db_path: str = DB_PATH, out_dir: str = OUT_DIR) -> None:
     plt.close()
     print(f"\nFeature importance plot saved.")
 
-    # Quantile models for the 90% prediction interval (p5 / p95)
-    print(f"\nTraining quantile models (p{int(Q_LO*100)} / p{int(Q_HI*100)})...")
+    # Quantile models for the 90% prediction interval (p5 / p95), conformalized:
+    # raw quantile regressors undercover (77% observed vs 90% nominal), so we
+    # hold out a calibration split and widen the interval by the conformity-score
+    # quantile (CQR). The point model above still uses the full training data.
+    print(f"\nTraining quantile models (p{int(Q_LO*100)} / p{int(Q_HI*100)}, conformalized)...")
+    X_fit, X_cal, y_fit, y_cal = train_test_split(
+        X_train, y_train.reset_index(drop=True), test_size=0.2, random_state=42
+    )
     q_params = dict(
         n_estimators=500, learning_rate=0.05, max_depth=6,
         subsample=0.8, colsample_bytree=0.8, random_state=42,
@@ -159,11 +165,21 @@ def train(db_path: str = DB_PATH, out_dir: str = OUT_DIR) -> None:
     )
     model_q_lo = xgb.XGBRegressor(objective="reg:quantileerror", quantile_alpha=Q_LO, **q_params)
     model_q_hi = xgb.XGBRegressor(objective="reg:quantileerror", quantile_alpha=Q_HI, **q_params)
-    model_q_lo.fit(X_train, y_train)
-    model_q_hi.fit(X_train, y_train)
+    model_q_lo.fit(X_fit, y_fit)
+    model_q_hi.fit(X_fit, y_fit)
 
-    lo_pred = model_q_lo.predict(X_test)
-    hi_pred = model_q_hi.predict(X_test)
+    # Conformity scores: how far outside the raw interval each calibration point falls
+    cal_lo = model_q_lo.predict(X_cal)
+    cal_hi = model_q_hi.predict(X_cal)
+    scores = np.maximum(cal_lo - y_cal.values, y_cal.values - cal_hi)
+    alpha = 1.0 - (Q_HI - Q_LO)  # 0.10 for a 90% interval
+    n_cal = len(scores)
+    q_level = min(np.ceil((n_cal + 1) * (1 - alpha)) / n_cal, 1.0)
+    qhat = float(np.quantile(scores, q_level, method="higher"))
+    print(f"  Conformal offset (qhat)       : {qhat:.0f} €/m²  ({n_cal} calibration rows)")
+
+    lo_pred = model_q_lo.predict(X_test) - qhat
+    hi_pred = model_q_hi.predict(X_test) + qhat
     coverage = np.mean((y_test.values >= lo_pred) & (y_test.values <= hi_pred))
     avg_width = np.mean(hi_pred - lo_pred)
     print(f"  90% interval coverage on test : {coverage:.1%}  (target ≥90%)")
@@ -191,6 +207,7 @@ def train(db_path: str = DB_PATH, out_dir: str = OUT_DIR) -> None:
         "interval": {
             "q_lo": Q_LO,
             "q_hi": Q_HI,
+            "conformal_offset": qhat,
             "coverage": float(coverage),
             "avg_width": float(avg_width),
         },

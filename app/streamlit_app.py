@@ -262,8 +262,9 @@ def predict_interval(listing, model, q_lo, q_hi, imputer, meta):
     df_row = _feature_row(listing, meta)
     df_imp = pd.DataFrame(imputer.transform(df_row), columns=meta["feature_cols"])
     pred = float(model.predict(df_imp)[0])
-    lo   = float(q_lo.predict(df_imp)[0])
-    hi   = float(q_hi.predict(df_imp)[0])
+    qhat = float(meta.get("interval", {}).get("conformal_offset", 0.0))
+    lo   = float(q_lo.predict(df_imp)[0]) - qhat
+    hi   = float(q_hi.predict(df_imp)[0]) + qhat
     return pred, min(lo, pred), max(hi, pred)
 
 
