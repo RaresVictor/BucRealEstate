@@ -17,11 +17,25 @@ def init_db(db_path: str = "real_estate.db") -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Additive migrations for DBs created before a column existed."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(Listings)")}
+    if cols and "coords_failed_at" not in cols:
+        conn.execute("ALTER TABLE Listings ADD COLUMN coords_failed_at TIMESTAMP")
+        # Legacy sentinel: lat/lon = -1 meant "coords fetch failed"
+        conn.execute(
+            "UPDATE Listings SET lat = NULL, lon = NULL, "
+            "coords_failed_at = CURRENT_TIMESTAMP WHERE lat = -1"
+        )
+        conn.commit()
+
+
 def get_connection(db_path: str = "real_estate.db") -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    _migrate(conn)
     return conn
 
 
@@ -121,20 +135,50 @@ def insert_listing(conn: sqlite3.Connection, listing: dict) -> bool:
         )
         conn.commit()
         return cursor.rowcount > 0
-    except sqlite3.Error as e:
+    except sqlite3.Error:
         conn.rollback()
         raise
 
 
+def get_existing_urls(conn: sqlite3.Connection) -> set[str]:
+    """All listing URLs already in the DB — used to skip re-scraping."""
+    return {r["url"] for r in conn.execute("SELECT url FROM Listings")}
+
+
 def get_listings_missing_coords(conn: sqlite3.Connection, limit: int = 200) -> list:
-    """Listings that have no lat/lon yet (sentinel -1 means permanently failed)."""
+    """Listings with no lat/lon and no recorded fetch failure."""
     return conn.execute(
-        "SELECT id, url FROM Listings WHERE lat IS NULL LIMIT ?",
-        (limit,)
+        """
+        SELECT id, url, address_raw, year_built
+        FROM Listings
+        WHERE lat IS NULL AND coords_failed_at IS NULL
+        LIMIT ?
+        """,
+        (limit,),
     ).fetchall()
 
 
-def update_coords_and_geo(
+def mark_coords_failed(conn: sqlite3.Connection, listing_id: int) -> None:
+    conn.execute(
+        "UPDATE Listings SET coords_failed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (listing_id,),
+    )
+    conn.commit()
+
+
+def get_ungeocoded_listings(conn: sqlite3.Connection, limit: int = 100) -> list:
+    return conn.execute(
+        """
+        SELECT id, url, address_raw, year_built
+        FROM Listings
+        WHERE geocoded_at IS NULL AND coords_failed_at IS NULL
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def update_geocoding(
     conn: sqlite3.Connection,
     listing_id: int,
     lat: float,
@@ -144,7 +188,9 @@ def update_coords_and_geo(
     dist_metro_m: float,
     nearest_metro: str,
     dist_center_m: float,
+    seismic_risk: str | None = None,
 ) -> None:
+    """Write coords + derived geo fields; recompute-dependent fields included."""
     neighborhood_id = None
     if neighborhood:
         neighborhood_id = upsert_neighborhood(conn, neighborhood, zone)
@@ -153,41 +199,12 @@ def update_coords_and_geo(
         UPDATE Listings
         SET lat = ?, lon = ?, neighborhood_id = ?,
             dist_metro_m = ?, nearest_metro = ?, dist_center_m = ?,
+            seismic_risk = COALESCE(?, seismic_risk),
             geocoded_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """,
-        (lat, lon, neighborhood_id, dist_metro_m, nearest_metro, dist_center_m, listing_id),
-    )
-    conn.commit()
-
-
-def get_ungeocoded_listings(conn: sqlite3.Connection, limit: int = 100) -> list:
-    return conn.execute(
-        "SELECT * FROM Listings WHERE geocoded_at IS NULL LIMIT ?", (limit,)
-    ).fetchall()
-
-
-def update_geocoding(
-    conn: sqlite3.Connection,
-    listing_id: int,
-    lat: float,
-    lon: float,
-    neighborhood: str,
-    zone: str,
-    dist_metro_m: float,
-    nearest_metro: str,
-    dist_center_m: float,
-) -> None:
-    neighborhood_id = upsert_neighborhood(conn, neighborhood, zone)
-    conn.execute(
-        """
-        UPDATE Listings
-        SET lat = ?, lon = ?, neighborhood_id = ?,
-            dist_metro_m = ?, nearest_metro = ?, dist_center_m = ?,
-            geocoded_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (lat, lon, neighborhood_id, dist_metro_m, nearest_metro, dist_center_m, listing_id),
+        (lat, lon, neighborhood_id, dist_metro_m, nearest_metro,
+         dist_center_m, seismic_risk, listing_id),
     )
     conn.commit()
 
@@ -203,6 +220,7 @@ def get_listings_for_model(conn: sqlite3.Connection):
         LEFT JOIN Neighborhoods n ON l.neighborhood_id = n.id
         WHERE l.price_per_sqm IS NOT NULL
           AND l.lat IS NOT NULL
+          AND l.coords_failed_at IS NULL
     """
     return pd.read_sql_query(query, conn)
 

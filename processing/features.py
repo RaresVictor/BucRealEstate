@@ -2,7 +2,9 @@
 Boolean / categorical feature extraction and listing enrichment.
 """
 
-from geocoding.geocoding import validate_coords
+import re
+
+from geocoding.neighborhoods import HIGH_SEISMIC_RISK_NEIGHBORHOODS
 
 from processing.parser import (
     parse_price,
@@ -37,16 +39,20 @@ _UNFURNISHED_KEYWORDS = [
     "se vinde gol", "se vinde neechipat",
 ]
 
-# Seismic risk per CLAUDE.md specification
-HIGH_SEISMIC_RISK_NEIGHBORHOODS = {
-    "Armeneasca", "Unirii", "Universitate", "Colentina", "Pantelimon",
-    "Grivița", "Grivita", "Obor", "Dristor", "Iancului",
-}
-
-
 def has_feature(features_list: list, *keywords: str) -> bool:
     joined = " ".join(features_list).lower()
     return any(kw.lower() in joined for kw in keywords)
+
+
+# "fără parcare", "nu are lift", "nu este mobilat" must not count as a positive
+_NEGATION_RE = r"(?:f[ăa]r[ăa]|nu\s+(?:are|este|e|exist[ăa])|lips[ăa])\s+(?:\w+\s+){0,2}?"
+
+
+def _positive_mention(desc: str, kw: str) -> bool:
+    """True if kw appears in desc at least once NOT preceded by a negation."""
+    positives = len(re.findall(re.escape(kw), desc))
+    negated = len(re.findall(_NEGATION_RE + re.escape(kw), desc))
+    return positives > negated
 
 
 def parse_boolean_features(features_list: list, description: str | None) -> dict:
@@ -54,7 +60,7 @@ def parse_boolean_features(features_list: list, description: str | None) -> dict
     fl = [f.lower() for f in (features_list or [])]
 
     def in_desc(*kws):
-        return any(kw in desc for kw in kws)
+        return any(_positive_mention(desc, kw) for kw in kws)
 
     def in_feat(*kws):
         return has_feature(fl, *kws)
@@ -93,10 +99,11 @@ def is_explicitly_unfurnished(description: str | None) -> bool:
 
 
 def compute_is_new_build(year_built: int | None, construction_status: str | None) -> int:
-    """1 if the apartment is a new build (built/finishing 2020+) or under construction."""
+    """1 if the apartment is a recent build (last ~6 years) or under construction."""
+    from datetime import date
     if construction_status == "under_construction":
         return 1
-    if year_built is not None and year_built >= 2020:
+    if year_built is not None and year_built >= date.today().year - 6:
         return 1
     return 0
 
@@ -118,12 +125,14 @@ def compute_is_post_1977(year_built: int | None) -> int | None:
     return 1 if year_built > 1977 else 0
 
 
-def _validated_coords(lat, lon, address_raw: str | None) -> dict:
-    """Validate Storia's coordinates; refine with Nominatim if suspicious."""
+def _passthrough_coords(lat, lon) -> dict:
+    """
+    Store Storia's coordinates as-is. Validation/refinement with Nominatim is
+    a separate pipeline phase (--fetch-coords) — never during scraping (rule #3).
+    """
     if lat is None or lon is None:
         return {"lat": None, "lon": None}
-    lat, lon, _ = validate_coords(float(lat), float(lon), address_raw)
-    return {"lat": lat, "lon": lon}
+    return {"lat": float(lat), "lon": float(lon)}
 
 
 def enrich_listing(raw: dict) -> dict:
@@ -207,8 +216,8 @@ def enrich_listing(raw: dict) -> dict:
         # Penthouse/duplex
         "is_penthouse": int(is_penthouse),
 
-        # Coordinates — validated against Nominatim if Storia's look wrong
-        **_validated_coords(raw.get("lat"), raw.get("lon"), raw.get("address_raw")),
+        # Coordinates — straight from Storia; validated later by --fetch-coords
+        **_passthrough_coords(raw.get("lat"), raw.get("lon")),
 
         # Geographic features derived from coords (populated by geocoding job)
         "neighborhood": None,

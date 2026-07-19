@@ -3,9 +3,11 @@ Bucharest Real Estate Valuation App
 Design: Teal/Slate — professional real estate analytics
 """
 
+import html as html_lib
 import json
 import os
 import pickle
+import sqlite3
 import sys
 
 import matplotlib
@@ -39,6 +41,18 @@ html, body, [class*="css"] { font-family: 'Josefin Sans', sans-serif !important;
 #MainMenu, footer, [data-testid="stToolbar"], .stDeployButton { display: none !important; }
 [data-testid="stAppViewContainer"] { background: #F0FDFA; }
 
+/* Numbers never jiggle: tabular figures everywhere data lives */
+.v-value, .s-value, .d-value, .total-bar, .range-lab { font-variant-numeric: tabular-nums; }
+
+/* Motion: subtle entrance, fully disabled for reduced-motion users */
+@media (prefers-reduced-motion: no-preference) {
+  .card, .verdict-wrap, .total-bar, .step-card { animation: rise 0.25s ease-out both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
 /* Header */
 .re-header { text-align: center; padding: 2.5rem 1rem 1.75rem; border-bottom: 2px solid #CCFBF1; margin-bottom: 2rem; }
 .re-header h1 { font-family: 'Cinzel', serif !important; font-size: 2.1rem; font-weight: 700; color: #0F766E; margin: 0; letter-spacing: 0.06em; }
@@ -51,7 +65,7 @@ html, body, [class*="css"] { font-family: 'Josefin Sans', sans-serif !important;
 .card { background: #FFFFFF; border-radius: 14px; border: 1px solid #CCFBF1; padding: 1.25rem 1.5rem; margin-bottom: 1rem; box-shadow: 0 1px 4px rgba(15,118,110,0.07); }
 
 /* Verdict banner */
-.verdict-wrap { border-radius: 14px; padding: 1.5rem 2rem; display: flex; align-items: center; justify-content: space-around; gap: 1rem; margin-bottom: 0.75rem; }
+.verdict-wrap { border-radius: 14px; padding: 1.5rem 2rem; display: flex; align-items: center; justify-content: space-around; gap: 1rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
 .verdict-over  { background: linear-gradient(135deg,#FEF2F2,#FECACA); border: 1px solid #FCA5A5; }
 .verdict-under { background: linear-gradient(135deg,#F0FDFA,#CCFBF1); border: 1px solid #5EEAD4; }
 .verdict-fair  { background: linear-gradient(135deg,#FEFCE8,#FEF08A); border: 1px solid #FDE047; }
@@ -71,9 +85,9 @@ html, body, [class*="css"] { font-family: 'Josefin Sans', sans-serif !important;
 .total-bar .diff-pos { color: #DC2626; }
 .total-bar .diff-neg { color: #0F766E; }
 
-/* Detail grid */
+/* Detail grid — responsive: 4 cols desktop, 2 on narrow screens */
 .detail-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 0.65rem; margin-bottom: 0.65rem; }
-.detail-grid-2 { grid-template-columns: repeat(4,1fr); }
+@media (max-width: 640px) { .detail-grid { grid-template-columns: repeat(2,1fr); } }
 .d-item { background: #F0FDFA; border: 1px solid #CCFBF1; border-radius: 10px; padding: 0.75rem 1rem; }
 .d-label { font-size: 0.62rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #0F766E; margin-bottom: 0.25rem; }
 .d-value { font-size: 1rem; font-weight: 600; color: #134E4A; }
@@ -87,8 +101,9 @@ html, body, [class*="css"] { font-family: 'Josefin Sans', sans-serif !important;
 .pill-riskM   { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
 .pill-riskL   { background: #DCFCE7; color: #166534; border: 1px solid #BBF7D0; }
 
-/* Stat row */
+/* Stat row — responsive */
 .stat-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 0.65rem; margin-bottom: 1rem; }
+@media (max-width: 640px) { .stat-row { grid-template-columns: repeat(2,1fr); } }
 .s-item  { text-align: center; background: #F0FDFA; border: 1px solid #CCFBF1; border-radius: 10px; padding: 0.875rem 0.5rem; }
 .s-value { font-size: 1.25rem; font-weight: 700; color: #0F766E; }
 .s-label { font-size: 0.62rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #6B7280; margin-top: 0.2rem; }
@@ -101,10 +116,41 @@ html, body, [class*="css"] { font-family: 'Josefin Sans', sans-serif !important;
 .stTextInput input:focus { border-color: #0F766E !important; box-shadow: 0 0 0 3px rgba(15,118,110,0.15) !important; }
 .stTextInput label { font-weight: 600 !important; color: #134E4A !important; letter-spacing: 0.06em !important; font-size: 0.75rem !important; text-transform: uppercase !important; }
 
-/* Button */
-.stButton > button { background: linear-gradient(135deg,#0F766E,#14B8A6) !important; color: #FFF !important; border: none !important; border-radius: 10px !important; font-family: 'Josefin Sans', sans-serif !important; font-weight: 600 !important; letter-spacing: 0.1em !important; text-transform: uppercase !important; font-size: 0.82rem !important; padding: 0.6rem 2rem !important; box-shadow: 0 2px 10px rgba(15,118,110,0.28) !important; transition: all 0.2s ease !important; }
+/* Button — hover lift, press feedback, visible keyboard focus */
+.stButton > button { background: linear-gradient(135deg,#0F766E,#14B8A6) !important; color: #FFF !important; border: none !important; border-radius: 10px !important; font-family: 'Josefin Sans', sans-serif !important; font-weight: 600 !important; letter-spacing: 0.1em !important; text-transform: uppercase !important; font-size: 0.82rem !important; padding: 0.6rem 2rem !important; min-height: 44px !important; box-shadow: 0 2px 10px rgba(15,118,110,0.28) !important; transition: transform 0.15s ease, box-shadow 0.15s ease !important; cursor: pointer !important; }
 .stButton > button:hover { transform: translateY(-1px) !important; box-shadow: 0 4px 18px rgba(15,118,110,0.38) !important; }
-.stButton > button:active { transform: translateY(0) !important; }
+.stButton > button:active { transform: scale(0.98) !important; }
+.stButton > button:focus-visible { outline: 3px solid #0369A1 !important; outline-offset: 2px !important; }
+.stTextInput input:focus-visible { outline: 3px solid #0369A1 !important; outline-offset: 1px !important; }
+
+/* Price-position range bar */
+.range-wrap { background: #FFFFFF; border: 1px solid #CCFBF1; border-radius: 10px; padding: 1rem 1.25rem 1.4rem; margin-bottom: 0.75rem; }
+.range-title { font-size: 0.65rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #6B7280; margin-bottom: 0.9rem; }
+.range-track { position: relative; height: 10px; border-radius: 6px; background: linear-gradient(90deg,#99F6E4,#5EEAD4 50%,#99F6E4); }
+.range-marker { position: absolute; top: 50%; transform: translate(-50%,-50%); width: 4px; height: 22px; border-radius: 2px; }
+.range-marker.est { background: #0F766E; }
+.range-marker.ask { background: #DC2626; }
+.range-lab { position: absolute; transform: translateX(-50%); font-size: 0.68rem; font-weight: 600; white-space: nowrap; }
+.range-lab.est { color: #0F766E; top: 1.1rem; }
+.range-lab.ask { color: #DC2626; top: -1.35rem; }
+.range-ends { display: flex; justify-content: space-between; font-size: 0.68rem; color: #6B7280; margin-top: 1.7rem; }
+
+/* Empty state: how-it-works steps */
+.step-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 0.75rem; margin-top: 1.5rem; }
+@media (max-width: 640px) { .step-grid { grid-template-columns: 1fr; } }
+.step-card { background: #FFFFFF; border: 1px solid #CCFBF1; border-radius: 14px; padding: 1.25rem; text-align: center; box-shadow: 0 1px 4px rgba(15,118,110,0.07); }
+.step-icon { display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 12px; background: #F0FDFA; border: 1px solid #CCFBF1; color: #0F766E; margin-bottom: 0.6rem; }
+.step-num { font-size: 0.62rem; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: #14B8A6; margin-bottom: 0.25rem; }
+.step-title { font-family: 'Cinzel', serif; font-size: 0.92rem; font-weight: 600; color: #134E4A; margin-bottom: 0.35rem; }
+.step-desc { font-size: 0.78rem; color: #6B7280; line-height: 1.5; }
+
+/* Methodology / disclaimer note */
+.method-note { display: flex; gap: 0.6rem; align-items: flex-start; background: #FFFFFF; border: 1px solid #CCFBF1; border-left: 3px solid #14B8A6; border-radius: 0 10px 10px 0; padding: 0.7rem 1rem; font-size: 0.78rem; color: #134E4A; line-height: 1.5; margin-bottom: 1rem; }
+.method-note svg { flex-shrink: 0; margin-top: 0.1rem; color: #0F766E; }
+
+/* Address line with icon */
+.addr-line { display: flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: #6B7280; margin-top: 0.35rem; letter-spacing: 0.04em; }
+.addr-line svg { flex-shrink: 0; color: #0F766E; }
 
 /* Spinner */
 .stSpinner > div { border-top-color: #0F766E !important; }
@@ -155,18 +201,18 @@ def load_model():
         with open(os.path.join(MODEL_DIR, name), "rb") as f:
             return pickle.load(f)
     model    = _load("model.pkl")
-    q10      = _load("model_q10.pkl")
-    q90      = _load("model_q90.pkl")
+    q_lo     = _load("model_q_lo.pkl")
+    q_hi     = _load("model_q_hi.pkl")
     imputer  = _load("imputer.pkl")
     with open(os.path.join(MODEL_DIR, "metadata.json")) as f:
         meta = json.load(f)
-    return model, q10, q90, imputer, meta
+    return model, q_lo, q_hi, imputer, meta
 
 
 @st.cache_data(ttl=3600)
 def load_market_data() -> pd.DataFrame:
-    import sqlite3
-    conn = sqlite3.connect(DB_PATH)
+    from database.db_manager import get_connection
+    conn = get_connection(DB_PATH)
     df = pd.read_sql_query(
         """
         SELECT l.price_per_sqm, l.area_sqm, l.rooms, l.year_built,
@@ -177,7 +223,8 @@ def load_market_data() -> pd.DataFrame:
         FROM Listings l
         LEFT JOIN Neighborhoods n ON l.neighborhood_id = n.id
         WHERE l.price_per_sqm IS NOT NULL
-          AND l.lat IS NOT NULL AND l.lat != -1
+          AND l.lat IS NOT NULL
+          AND l.coords_failed_at IS NULL
         """,
         conn,
     )
@@ -211,12 +258,12 @@ def _feature_row(listing: dict, meta: dict) -> pd.DataFrame:
     return pd.DataFrame([row])[feature_cols]
 
 
-def predict_interval(listing, model, q10, q90, imputer, meta):
+def predict_interval(listing, model, q_lo, q_hi, imputer, meta):
     df_row = _feature_row(listing, meta)
     df_imp = pd.DataFrame(imputer.transform(df_row), columns=meta["feature_cols"])
     pred = float(model.predict(df_imp)[0])
-    lo   = float(q10.predict(df_imp)[0])
-    hi   = float(q90.predict(df_imp)[0])
+    lo   = float(q_lo.predict(df_imp)[0])
+    hi   = float(q_hi.predict(df_imp)[0])
     return pred, min(lo, pred), max(hi, pred)
 
 
@@ -242,10 +289,15 @@ def _histogram(df_neigh: pd.DataFrame, listed: float | None, predicted: float):
 
 def _zone_bar(df_all: pd.DataFrame, current_nb: str | None):
     _chart_style()
-    med = (
+    med_all = (
         df_all.groupby("neighborhood")["price_per_sqm"]
-        .median().sort_values().dropna()
+        .median().dropna().sort_values(ascending=False)
     )
+    # Data density: top 15 neighborhoods, always including the current one
+    med = med_all.head(15)
+    if current_nb and current_nb in med_all.index and current_nb not in med.index:
+        med = pd.concat([med, med_all.loc[[current_nb]]])
+    med = med.sort_values()
     colors = [C_PRIMARY if idx == current_nb else "#CCFBF1" for idx in med.index]
     edge   = [C_DARK    if idx == current_nb else C_BORDER  for idx in med.index]
     fig, ax = plt.subplots(figsize=(8, max(4, len(med) * 0.3)))
@@ -264,6 +316,11 @@ def _zone_bar(df_all: pd.DataFrame, current_nb: str | None):
 
 
 # ── HTML helpers ──────────────────────────────────────────────────────────────
+def _esc(value) -> str:
+    """Escape scraped/external text before injecting it into st.html."""
+    return html_lib.escape(str(value), quote=True)
+
+
 def _verdict_html(listed: float | None, pred: float, lo: float, hi: float) -> str:
     if listed:
         pct = (listed - pred) / pred * 100
@@ -301,13 +358,57 @@ def _verdict_html(listed: float | None, pred: float, lo: float, hi: float) -> st
 
 
 def _detail_item(label: str, value) -> str:
+    shown = _esc(value) if value not in (None, "?") else "—"
     return f"""<div class="d-item"><div class="d-label">{label}</div>
-               <div class="d-value">{value if value not in (None, "?") else "—"}</div></div>"""
+               <div class="d-value">{shown}</div></div>"""
 
 
 def _stat_item(value: str, label: str) -> str:
     return f"""<div class="s-item"><div class="s-value">{value}</div>
                <div class="s-label">{label}</div></div>"""
+
+
+# Inline SVG icons (Lucide outlines) — consistent 1.5px stroke, no emoji
+_SVG = {
+    "map-pin": '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>',
+    "link": '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+    "chart": '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16v-5"/><path d="M12 16V8"/><path d="M17 16v-3"/></svg>',
+    "badge": '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"/><path d="m9 12 2 2 4-4"/></svg>',
+    "info": '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
+}
+
+
+def _range_bar_html(listed: float | None, pred: float, lo: float, hi: float) -> str:
+    """Visual position of the model estimate (and asking price) within the p5–p95 band."""
+    span = max(hi - lo, 1.0)
+    pad = span * 0.15
+    lo_e, hi_e = lo - pad, hi + pad
+    if listed:
+        lo_e, hi_e = min(lo_e, listed - pad * 0.5), max(hi_e, listed + pad * 0.5)
+
+    def pct(v: float) -> float:
+        return max(3.0, min(97.0, (v - lo_e) / (hi_e - lo_e) * 100))
+
+    ask_html = ""
+    if listed:
+        p = pct(listed)
+        ask_html = (
+            f'<div class="range-marker ask" style="left:{p:.1f}%;"></div>'
+            f'<div class="range-lab ask" style="left:{p:.1f}%;">cerut {listed:,.0f}</div>'
+        )
+    pe = pct(pred)
+    return f"""
+    <div class="range-wrap">
+        <div class="range-title">Poziția prețului în intervalul estimat (€/m²)</div>
+        <div style="padding-top:1.4rem;">
+            <div class="range-track">
+                <div class="range-marker est" style="left:{pe:.1f}%;"></div>
+                <div class="range-lab est" style="left:{pe:.1f}%;">estimare {pred:,.0f}</div>
+                {ask_html}
+            </div>
+        </div>
+        <div class="range-ends"><span>{lo:,.0f} (p5)</span><span>{hi:,.0f} (p95)</span></div>
+    </div>"""
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -318,7 +419,7 @@ st.set_page_config(
 )
 st.html(CSS)
 
-model, q10, q90, imputer, meta = load_model()
+model, q_lo, q_hi, imputer, meta = load_model()
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.html("""
@@ -333,25 +434,20 @@ url = st.text_input(
     "Link anunț Storia.ro",
     placeholder="https://www.storia.ro/ro/oferta/...",
 )
+url_clean = (url or "").strip()
 
-if url and not url.startswith("https://www.storia.ro/ro/oferta/"):
+if url_clean and not url_clean.startswith("https://www.storia.ro/ro/oferta/"):
     st.error("Inserează un link valid de pe storia.ro/ro/oferta/...")
     st.stop()
 
 analyze = st.button("Analizează", type="primary", use_container_width=False)
 
-if url and analyze:
+if url_clean and analyze:
     # ── Scrape ────────────────────────────────────────────────────────────────
     with st.spinner("Se preiau datele anunțului..."):
         try:
             from scraper.storia_scraper import scrape_listing
-            from processing.features import enrich_listing
-            from geocoding.geocoding import (
-                point_in_neighborhood, get_zone,
-                get_nearest_metro, get_distance_to_center, validate_coords,
-            )
-            import sqlite3
-            raw = scrape_listing(url.strip())
+            raw = scrape_listing(url_clean)
         except Exception as e:
             st.error(f"Eroare la preluarea anunțului: {e}")
             st.stop()
@@ -361,6 +457,11 @@ if url and analyze:
         st.stop()
 
     with st.spinner("Se procesează și se estimează prețul..."):
+        from processing.features import enrich_listing, compute_seismic_risk
+        from geocoding.geocoding import (
+            point_in_neighborhood, get_zone,
+            get_nearest_metro, get_distance_to_center,
+        )
         enriched = enrich_listing(raw)
         lat, lon = enriched.get("lat"), enriched.get("lon")
         if lat and lon:
@@ -368,30 +469,56 @@ if url and analyze:
             enriched["zone"]         = get_zone(enriched["neighborhood"])
             enriched["dist_metro_m"], enriched["nearest_metro"] = get_nearest_metro(lat, lon)
             enriched["dist_center_m"] = get_distance_to_center(lat, lon)
+            # Seismic risk depends on the REAL neighborhood — recompute it
+            enriched["seismic_risk"] = compute_seismic_risk(
+                enriched.get("year_built"), enriched["neighborhood"]
+            )
 
-        pred, lo, hi = predict_interval(enriched, model, q10, q90, imputer, meta)
-        listed_psqm  = enriched.get("price_per_sqm")
-        listed_price = enriched.get("price_eur")
-        area         = enriched.get("area_sqm")
-        neighborhood = enriched.get("neighborhood")
-        zone         = enriched.get("zone")
-        rooms        = enriched.get("rooms")
+        pred, lo, hi = predict_interval(enriched, model, q_lo, q_hi, imputer, meta)
+
+    # Persist across Streamlit reruns — otherwise any widget interaction
+    # (e.g. the save button below) would wipe the results.
+    st.session_state["analysis"] = {
+        "url": url_clean, "raw": raw, "enriched": enriched,
+        "pred": pred, "lo": lo, "hi": hi,
+    }
+
+_analysis = st.session_state.get("analysis")
+if _analysis and _analysis["url"] == url_clean:
+    raw      = _analysis["raw"]
+    enriched = _analysis["enriched"]
+    pred, lo, hi = _analysis["pred"], _analysis["lo"], _analysis["hi"]
+
+    listed_psqm  = enriched.get("price_per_sqm")
+    listed_price = enriched.get("price_eur")
+    area         = enriched.get("area_sqm")
+    neighborhood = enriched.get("neighborhood")
+    zone         = enriched.get("zone")
+    rooms        = enriched.get("rooms")
 
     # ── Title ─────────────────────────────────────────────────────────────────
     st.divider()
     st.html(f"""
     <div class="card">
         <div style="font-family:'Cinzel',serif;font-size:1.1rem;font-weight:600;color:#134E4A;">
-            {raw.get("title") or "Anunț"}
+            {_esc(raw.get("title") or "Anunț")}
         </div>
-        <div style="font-size:0.8rem;color:#6B7280;margin-top:0.3rem;letter-spacing:0.04em;">
-            📍 {enriched.get("address_raw") or "Adresă necunoscută"}
+        <div class="addr-line">
+            {_SVG["map-pin"]} {_esc(enriched.get("address_raw") or "Adresă necunoscută")}
         </div>
     </div>
     """)
 
     # ── Verdict ───────────────────────────────────────────────────────────────
     st.html(_verdict_html(listed_psqm, pred, lo, hi))
+    st.html(_range_bar_html(listed_psqm, pred, lo, hi))
+    st.html(f"""
+    <div class="method-note">
+        {_SVG["info"]}
+        <span>Estimarea se bazează pe <b>prețurile cerute</b> în anunțurile de pe piață,
+        nu pe prețuri finale de tranzacție. Prețul real de vânzare este de obicei
+        cu câteva procente sub cel cerut.</span>
+    </div>""")
 
     if area and listed_price:
         est_total  = pred * area
@@ -526,29 +653,68 @@ if url and analyze:
     else:
         st.caption("Nu sunt suficiente date comparabile în baza de date.")
 
-    # 3. Prețuri pe cartiere
-    st.html('<div class="sec-title">Prețuri mediane pe cartiere</div>')
+    # 3. Prețuri pe cartiere (top 15 + cartierul curent)
+    st.html('<div class="sec-title">Top cartiere după preț median</div>')
     st.pyplot(_zone_bar(df_all, neighborhood), use_container_width=True)
 
     # ── Save to DB ────────────────────────────────────────────────────────────
     st.divider()
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    exists = conn.execute("SELECT id FROM Listings WHERE url = ?", (url.strip(),)).fetchone()
-    conn.close()
+    from database.db_manager import get_connection, insert_listing
+    conn = get_connection(DB_PATH)
+    exists = conn.execute(
+        "SELECT id FROM Listings WHERE url = ?", (_analysis["url"],)
+    ).fetchone()
 
     if exists:
+        conn.close()
         st.success("Acest anunț este deja în baza de date.")
     else:
         if st.button("Adaugă în baza de date"):
             try:
-                from database.db_manager import get_connection, insert_listing
-                conn = get_connection(DB_PATH)
                 insert_listing(conn, enriched)
-                conn.close()
                 st.success("Anunț adăugat în baza de date!")
+                load_market_data.clear()
             except Exception as e:
                 st.error(f"Eroare la salvare: {e}")
+        conn.close()
+else:
+    # ── Empty state: explain the product instead of a blank page ─────────────
+    n_listings = meta.get("n_train")
+    compare_txt = (
+        f"Comparăm apartamentul cu {n_listings:,} anunțuri reale din București"
+        if n_listings else "Comparăm apartamentul cu anunțuri reale din București"
+    )
+    st.html(f"""
+    <div class="step-grid">
+        <div class="step-card">
+            <div class="step-icon">{_SVG["link"]}</div>
+            <div class="step-num">Pasul 1</div>
+            <div class="step-title">Lipește link-ul</div>
+            <div class="step-desc">Copiază adresa unui anunț de apartament de pe
+            Storia.ro și lipește-o în câmpul de mai sus.</div>
+        </div>
+        <div class="step-card">
+            <div class="step-icon">{_SVG["chart"]}</div>
+            <div class="step-num">Pasul 2</div>
+            <div class="step-title">Modelul analizează</div>
+            <div class="step-desc">{compare_txt}: cartier real, distanță metrou,
+            an construcție, dotări, risc seismic.</div>
+        </div>
+        <div class="step-card">
+            <div class="step-icon">{_SVG["badge"]}</div>
+            <div class="step-num">Pasul 3</div>
+            <div class="step-title">Primești verdictul</div>
+            <div class="step-desc">Estimare €/m² cu interval de încredere,
+            plus comparație directă cu piața din zonă.</div>
+        </div>
+    </div>
+    <div class="method-note" style="margin-top:1rem;">
+        {_SVG["info"]}
+        <span>Estimările se bazează pe <b>prețurile cerute</b> în anunțuri,
+        nu pe prețuri finale de tranzacție — un instrument de comparație
+        cu piața, nu o evaluare oficială.</span>
+    </div>
+    """)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -566,9 +732,10 @@ with st.sidebar:
             help="% cazuri din test unde prețul real a căzut în intervalul estimat.",
         )
 
-    df_sb = load_market_data()
     st.divider()
-    st.caption(f"Antrenat pe {len(df_sb):,} anunțuri din București")
+    n_train = meta.get("n_train")
+    if n_train:
+        st.caption(f"Antrenat pe {n_train:,} anunțuri din București")
     st.caption("XGBoost · 500 estimatori · IQR filtered")
 
     img = os.path.join(MODEL_DIR, "feature_importance.png")

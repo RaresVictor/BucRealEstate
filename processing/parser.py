@@ -124,16 +124,13 @@ def parse_compartmentare(details: dict) -> str | None:
 def parse_is_penthouse(details: dict, title: str | None, description: str | None) -> bool:
     """
     True if the listing is a penthouse or duplex on the top floor.
-    Criteria: explicitly called penthouse/duplex OR floor == total_floors AND area > 120m².
+    Criteria: explicitly called penthouse/duplex in the TITLE (a description can
+    merely mention one nearby), OR floor == total_floors AND area > 120m².
     """
-    text = f"{title or ''} {description or ''}".lower()
-    if "penthouse" in text or "duplex" in text:
+    if re.search(r"\b(penthouse|duplex)\b", title or "", re.IGNORECASE):
         return True
     floor, total = parse_floor(details)
-    area_val = details.get("suprafață utilă") or details.get("suprafata utila") or ""
-    import re
-    area_m = re.search(r"(\d+(?:[.,]\d+)?)", area_val)
-    area = float(area_m.group(1).replace(",", ".")) if area_m else 0
+    area = parse_area(details, description) or 0
     if floor is not None and total is not None and floor >= total and area > 120:
         return True
     return False

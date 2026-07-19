@@ -61,6 +61,47 @@ def _is_suspicious(lat: float, lon: float, address_raw: str | None) -> bool:
     return False
 
 
+def _build_search_candidates(address_raw: str) -> list[str]:
+    """From a raw address, build geocoding queries from most to least specific."""
+    cleaned = address_raw.strip()
+    no_number = re.sub(r"\b(nr\.?|numărul|numarul)\s*\d+\w*", "", cleaned).strip(" ,")
+    no_sector = re.sub(r",?\s*Sector(ul)?\s+\d", "", no_number, flags=re.IGNORECASE).strip(" ,")
+    candidates = [cleaned, no_number, no_sector]
+    # Street name only: "Str. Armeneasca ..." → "Strada Armeneasca"
+    m = re.search(
+        r"\b(?:str(?:ada)?\.?|bd\.?|bulevardul|calea|aleea|șoseaua|soseaua|intrarea|drumul)\s+([^\d,]+)",
+        cleaned, flags=re.IGNORECASE,
+    )
+    if m:
+        street = re.sub(r"\b(nr|numărul|numarul)\.?\s*$", "", m.group(0)).strip(" ,")
+        candidates.append(street)
+    seen: set[str] = set()
+    unique = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            unique.append(f"{c}, București, România")
+    return unique
+
+
+def get_coords_from_address(address_raw: str | None) -> tuple[float, float] | None:
+    """
+    Geocode a raw address via Nominatim, trying progressively simpler queries.
+    Returns (lat, lon) on first hit inside Bucharest, None if all fail.
+    """
+    if not address_raw:
+        return None
+    for query in _build_search_candidates(address_raw):
+        try:
+            loc = _geolocator.geocode(query)
+            time.sleep(0.5)
+            if loc and _in_bucharest(loc.latitude, loc.longitude):
+                return loc.latitude, loc.longitude
+        except Exception:
+            pass
+    return None
+
+
 def _nominatim_refine(address_raw: str) -> tuple[float, float] | None:
     """Try Nominatim on progressively simplified versions of the address."""
     candidates = [

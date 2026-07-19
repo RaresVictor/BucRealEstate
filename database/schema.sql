@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS Listings (
     details_raw_json     TEXT,
 
     scraped_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    geocoded_at          TIMESTAMP
+    geocoded_at          TIMESTAMP,
+    coords_failed_at     TIMESTAMP  -- set when coordinates could not be obtained
 );
 
 CREATE INDEX IF NOT EXISTS idx_neighborhood ON Listings(neighborhood_id);

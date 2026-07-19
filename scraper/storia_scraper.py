@@ -8,9 +8,7 @@ Fallback: BeautifulSoup HTML extraction if JSON is absent.
 
 import json
 import logging
-import random
 import re
-import time
 from urllib.parse import urljoin
 
 import cloudscraper
@@ -35,6 +33,13 @@ HEADERS = {
 }
 
 _scraper = None
+
+
+def _normalize_offer_url(href: str) -> str:
+    """Canonical offer URL: absolute, no query string, no promoted '/hpr' prefix
+    (the /hpr/ variant returns 410 when fetched directly)."""
+    full = urljoin(BASE_DOMAIN, href).split("?")[0]
+    return full.replace("/hpr/ro/oferta/", "/ro/oferta/")
 
 
 def _get_scraper() -> cloudscraper.CloudScraper:
@@ -72,13 +77,12 @@ def get_listing_urls(page_num: int) -> list[str]:
         for tag in soup.find_all("a", href=True):
             href: str = tag["href"]
             if "/ro/oferta/" in href:
-                full = urljoin(BASE_DOMAIN, href).split("?")[0]
+                full = _normalize_offer_url(href)
                 if full not in seen:
                     seen.add(full)
                     urls.append(full)
 
     logger.info(f"Page {page_num}: found {len(urls)} listing URLs")
-    time.sleep(random.uniform(1.0, 2.5))
     return urls
 
 
@@ -131,7 +135,6 @@ def scrape_listing(url: str) -> dict | None:
         logger.debug(f"No __NEXT_DATA__ for {url}, falling back to HTML parsing")
         result = _parse_from_html(soup, url)
 
-    time.sleep(random.uniform(1.0, 2.5))
     return result
 
 
@@ -171,7 +174,7 @@ def _urls_from_next_data(html: str) -> list[str]:
         for item in items:
             u = item.get("url") or item.get("slug")
             if u and "/ro/oferta/" in u:
-                full = urljoin(BASE_DOMAIN, u).split("?")[0]
+                full = _normalize_offer_url(u)
                 if full not in seen:
                     seen.add(full)
                     urls.append(full)
